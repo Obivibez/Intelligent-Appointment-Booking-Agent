@@ -1,0 +1,660 @@
+{
+  "name": "Intelligent Appointment Booking Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1936,
+        96
+      ],
+      "id": "12076139-1937-4a7c-9192-78a41e32a860",
+      "name": "Telegram Trigger",
+      "alwaysOutputData": true,
+      "retryOnFail": true,
+      "webhookId": "4a26ecaa-b4eb-4984-8a1e-dcb711a341de",
+      "credentials": {
+        "telegramApi": {
+          "id": "oOErvo4qYzoWWLXa",
+          "name": "Telegram account 4"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "name": "telegram_chat_id",
+              "value": "={{ $json.message.chat.id }}",
+              "type": "string"
+            },
+            {
+              "name": "telegram_user_name",
+              "value": "={{ $json.message.from.first_name || '' }}",
+              "type": "string"
+            },
+            {
+              "name": "telegram_username",
+              "value": "={{ $json.message.from.username || '' }}",
+              "type": "string"
+            },
+            {
+              "name": "user_message",
+              "value": "={{ $json.message.text || '' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -1712,
+        96
+      ],
+      "id": "3afcb681-ac1d-4c10-a3f3-b592d5a82df3",
+      "name": "Normalize Telegram Input",
+      "alwaysOutputData": true,
+      "retryOnFail": true
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.user_message }}",
+        "options": {
+          "systemMessage": "=You are an intelligent appointment booking and event coordination assistant.\n\nYou interact with users through Telegram and help them book appointments professionally.\n\nYour connected tools and downstream systems include Google Calendar, Zoom, Gmail, and Telegram.\n\nYour job is to understand the message and return only valid JSON.\n\nYou must identify intent and extract these fields when available:\n- intent\n- attendee_name\n- attendee_email\n- meeting_title\n- meeting_description\n- requested_start\n- requested_end\n- timezone\n\nRules:\n- Valid intents are: book_appointment, reschedule_appointment, cancel_appointment, general_query\n- Always normalize time values into ISO 8601 format when possible\n- If the user gives only a start time, assume a 60-minute meeting\n- If timezone is missing, default to America/Toronto\n- If attendee_email is missing, do not invent one\n- If required booking data is missing, set needs_follow_up to true and ask one short follow-up question\n- Be concise and professional\n- Return JSON only\n\nOutput schema:\n{\n  \"intent\": \"book_appointment | reschedule_appointment | cancel_appointment | general_query\",\n  \"attendee_name\": \"\",\n  \"attendee_email\": \"\",\n  \"meeting_title\": \"\",\n  \"meeting_description\": \"\",\n  \"requested_start\": \"\",\n  \"requested_end\": \"\",\n  \"timezone\": \"America/Toronto\",\n  \"needs_follow_up\": true,\n  \"follow_up_question\": \"\"\n}"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        -1472,
+        96
+      ],
+      "id": "27e279f8-94ca-4a4b-9b80-382e849416d4",
+      "name": "AI Booking Parser",
+      "alwaysOutputData": true,
+      "retryOnFail": true
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-5-mini"
+        },
+        "builtInTools": {},
+        "options": {
+          "maxTokens": -1
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        -1808,
+        304
+      ],
+      "id": "8cb5be32-ca20-4d8e-a370-1e43d449c058",
+      "name": "OpenAI Chat Model",
+      "alwaysOutputData": true,
+      "retryOnFail": true,
+      "credentials": {
+        "openAiApi": {
+          "id": "T8KoLiZMmtta3hRG",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $json.telegram_chat_id || $workflow.id }}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        -1648,
+        304
+      ],
+      "id": "33431585-becc-47df-a2f0-91259a1a3fc9",
+      "name": "Simple Memory"
+    },
+    {
+      "parameters": {
+        "jsCode": "let raw = $json.output || $json.text || $json.response || $json;\n\nif (typeof raw === 'string') {\n  raw = JSON.parse(raw);\n}\n\nfunction toIso(value) {\n  if (!value) return '';\n  const d = new Date(value);\n  if (isNaN(d.getTime())) return '';\n  return d.toISOString();\n}\n\nconst requestedStart = toIso(raw.requested_start);\nlet requestedEnd = toIso(raw.requested_end);\n\nif (requestedStart && !requestedEnd) {\n  const end = new Date(requestedStart);\n  end.setHours(end.getHours() + 1);\n  requestedEnd = end.toISOString();\n}\n\nreturn [\n  {\n    json: {\n      intent: raw.intent || 'general_query',\n      attendee_name: raw.attendee_name || '',\n      attendee_email: raw.attendee_email || '',\n      meeting_title: raw.meeting_title || 'Appointment Booking',\n      meeting_description: raw.meeting_description || 'Appointment scheduled through Telegram booking agent.',\n      requested_start: requestedStart,\n      requested_end: requestedEnd,\n      timezone: raw.timezone || 'America/Toronto',\n      needs_follow_up: !!raw.needs_follow_up,\n      follow_up_question: raw.follow_up_question || '',\n      telegram_chat_id: $('Normalize Telegram Input').first().json.telegram_chat_id,\n      telegram_user_name: $('Normalize Telegram Input').first().json.telegram_user_name,\n      telegram_username: $('Normalize Telegram Input').first().json.telegram_username,\n      user_message: $('Normalize Telegram Input').first().json.user_message\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1248,
+        96
+      ],
+      "id": "d1941a21-c16f-4a31-9352-c99d46df1d47",
+      "name": "Validate and Shape Data",
+      "alwaysOutputData": true,
+      "retryOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.intent }}",
+              "rightValue": "book_appointment",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -1024,
+        96
+      ],
+      "id": "32a6b776-4b6b-4a68-a41b-8969ab060c97",
+      "name": "Is Booking Request?",
+      "alwaysOutputData": true,
+      "retryOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.needs_follow_up }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -800,
+        -16
+      ],
+      "id": "7622acc4-44ff-4fa0-a669-0798b8b3a43c",
+      "name": "Needs Follow Up?",
+      "alwaysOutputData": true,
+      "retryOnFail": true
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Normalize Telegram Input').first().json.telegram_chat_id }}",
+        "text": "={{ $json.follow_up_question || 'Please share your preferred date, time, timezone, and email address so I can complete your booking.' }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [
+        -560,
+        -112
+      ],
+      "id": "38e09046-70d4-4ece-8a62-ba9079dfafc8",
+      "name": "Ask Follow Up on Telegram",
+      "alwaysOutputData": true,
+      "retryOnFail": true,
+      "webhookId": "87ad51b4-030c-46de-957d-db18ed167716",
+      "credentials": {
+        "telegramApi": {
+          "id": "oOErvo4qYzoWWLXa",
+          "name": "Telegram account 4"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "mode": "list",
+          "value": "primary"
+        },
+        "returnAll": true,
+        "timeMin": "={{ $json.requested_start }}",
+        "timeMax": "={{ $json.requested_end }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        -560,
+        96
+      ],
+      "id": "c38ac423-1f65-4da4-9e6b-6eea221c0b8d",
+      "name": "Check Calendar Availability",
+      "alwaysOutputData": true,
+      "retryOnFail": true,
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "N6ODSBc8zjfWQG9E",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst base = $('Validate and Shape Data').first().json;\n\nreturn [\n  {\n    json: {\n      is_available: items.length === 0,\n      event_count: items.length,\n      attendee_name: base.attendee_name,\n      attendee_email: base.attendee_email,\n      meeting_title: base.meeting_title,\n      meeting_description: base.meeting_description,\n      requested_start: base.requested_start,\n      requested_end: base.requested_end,\n      timezone: base.timezone,\n      telegram_chat_id: base.telegram_chat_id,\n      telegram_user_name: base.telegram_user_name,\n      telegram_username: base.telegram_username,\n      user_message: base.user_message\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -336,
+        96
+      ],
+      "id": "d7bb1d8e-2592-4456-bbe4-e79c3d755c46",
+      "name": "Evaluate Availability",
+      "alwaysOutputData": true,
+      "retryOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.is_available }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -112,
+        96
+      ],
+      "id": "603f9aaf-a5bc-472f-a617-ef9ca53d9f2b",
+      "name": "Time Slot Available?",
+      "alwaysOutputData": true,
+      "retryOnFail": true
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.telegram_chat_id }}",
+        "text": "={{ 'That time is not available. Please send another preferred date and time.' }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [
+        128,
+        -32
+      ],
+      "id": "581ed362-add3-4098-b729-465206167d87",
+      "name": "Send Slot Unavailable Message",
+      "alwaysOutputData": true,
+      "retryOnFail": true,
+      "webhookId": "b32a0ecf-60af-4876-afec-f43e84957cca",
+      "credentials": {
+        "telegramApi": {
+          "id": "oOErvo4qYzoWWLXa",
+          "name": "Telegram account 4"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "topic": "={{ $json.meeting_title }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.zoom",
+      "typeVersion": 1,
+      "position": [
+        128,
+        208
+      ],
+      "id": "efbe7f7f-f1fc-4fa5-80fe-b45de4a19d49",
+      "name": "Create Zoom Meeting",
+      "alwaysOutputData": true,
+      "retryOnFail": true,
+      "credentials": {
+        "zoomOAuth2Api": {
+          "id": "wP4XXQmvkXlX88S7",
+          "name": "Zoom account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "calendar": {
+          "__rl": true,
+          "mode": "list",
+          "value": "primary"
+        },
+        "start": "={{ $('Evaluate Availability').first().json.requested_start }}",
+        "end": "={{ $('Evaluate Availability').first().json.requested_end }}",
+        "additionalFields": {
+          "attendees": [
+            "={{ $('Evaluate Availability').first().json.attendee_email }}"
+          ],
+          "description": "={{ $('Evaluate Availability').first().json.meeting_description + '\\n\\nZoom Link: ' + ($json.join_url || 'Will be shared shortly') }}",
+          "summary": "={{ $('Evaluate Availability').first().json.meeting_title }}"
+        }
+      },
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        352,
+        208
+      ],
+      "id": "ec742c38-9bd0-4eb9-8ece-4a569d158ef1",
+      "name": "Create Calendar Event",
+      "alwaysOutputData": true,
+      "retryOnFail": true,
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "N6ODSBc8zjfWQG9E",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Evaluate Availability').first().json.attendee_email }}",
+        "subject": "={{ 'Appointment Confirmation: ' + $('Evaluate Availability').first().json.meeting_title }}",
+        "message": "==Hello {{ $('Evaluate Availability').first().json.attendee_name || 'there' }},<br><br>Your appointment has been confirmed.<br><br><strong>Title:</strong> {{ $('Evaluate Availability').first().json.meeting_title }}<br><strong>Start:</strong> {{ $('Evaluate Availability').first().json.requested_start }}<br><strong>End:</strong> {{ $('Evaluate Availability').first().json.requested_end }}<br><br><strong>Zoom Link:</strong> {{ $('Create Zoom Meeting').first().json.join_url || 'Will be shared shortly' }}<br><br>Best regards",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        576,
+        208
+      ],
+      "id": "e115c21a-388e-462e-ab5c-da89f1538a99",
+      "name": "Send Gmail Confirmation",
+      "alwaysOutputData": true,
+      "retryOnFail": true,
+      "webhookId": "1e4427fc-1b2b-4966-83d2-6ad421405549",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "tu1CRR4ntKUg1VQy",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Evaluate Availability').first().json.telegram_chat_id }}",
+        "text": "={{ 'Your appointment is confirmed.\\n\\nTitle: ' + $('Evaluate Availability').first().json.meeting_title + '\\nStart: ' + $('Evaluate Availability').first().json.requested_start + '\\nEnd: ' + $('Evaluate Availability').first().json.requested_end + '\\n\\nZoom Link: ' + ($('Create Zoom Meeting').first().json.join_url || 'Will be shared shortly') }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [
+        800,
+        208
+      ],
+      "id": "fda4500c-2257-475f-88ee-9bc08f2b937e",
+      "name": "Send Telegram Confirmation",
+      "alwaysOutputData": true,
+      "retryOnFail": true,
+      "webhookId": "9667e7b1-92de-4b30-b692-71ab822b6693",
+      "credentials": {
+        "telegramApi": {
+          "id": "oOErvo4qYzoWWLXa",
+          "name": "Telegram account 4"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.telegram_chat_id }}",
+        "text": "={{ 'I can help you book an appointment. Please send your preferred date, time, timezone, your name, and your email address.' }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [
+        -784,
+        272
+      ],
+      "id": "47e9e59e-be5f-4de2-8bdf-d7f37a591e6d",
+      "name": "General Query Reply",
+      "alwaysOutputData": true,
+      "retryOnFail": true,
+      "webhookId": "dc0e719f-eb78-455c-b50f-e2f58f9a2ab8",
+      "credentials": {
+        "telegramApi": {
+          "id": "oOErvo4qYzoWWLXa",
+          "name": "Telegram account 4"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Normalize Telegram Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Telegram Input": {
+      "main": [
+        [
+          {
+            "node": "AI Booking Parser",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Booking Parser",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Booking Parser",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Booking Parser": {
+      "main": [
+        [
+          {
+            "node": "Validate and Shape Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate and Shape Data": {
+      "main": [
+        [
+          {
+            "node": "Is Booking Request?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Booking Request?": {
+      "main": [
+        [
+          {
+            "node": "Needs Follow Up?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "General Query Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Needs Follow Up?": {
+      "main": [
+        [
+          {
+            "node": "Ask Follow Up on Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Check Calendar Availability",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Calendar Availability": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Availability",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate Availability": {
+      "main": [
+        [
+          {
+            "node": "Time Slot Available?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Time Slot Available?": {
+      "main": [
+        [
+          {
+            "node": "Create Zoom Meeting",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Slot Unavailable Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Zoom Meeting": {
+      "main": [
+        [
+          {
+            "node": "Create Calendar Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Calendar Event": {
+      "main": [
+        [
+          {
+            "node": "Send Gmail Confirmation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Gmail Confirmation": {
+      "main": [
+        [
+          {
+            "node": "Send Telegram Confirmation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "164c2932-5385-4557-b2e7-2c65b2a7a34e",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "dc7a9e4c60ac5904f8502bbc37b4f8e9598d430809a1ebd89db0c70280468aea"
+  },
+  "id": "mnhRag45glhurBOT",
+  "tags": []
+}
